@@ -34,9 +34,7 @@ The tool is written in C# and targets .NET 4.0+ for maximum compatibility withou
 You can compile this tool using the standard C# compiler (`csc.exe`) included with Windows. Run the following command from the project root:
 
 ```
-``C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /win32manifest:app.manifest /win32icon:icon.ico /out:DirectoryIconTool.exe /reference:System.Windows.Forms.dll /reference:System.Drawing.dll DirectoryIconTool.cs
-`
-`
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /win32manifest:app.manifest /win32icon:icon.ico /out:DirectoryIconTool.exe /reference:System.Windows.Forms.dll /reference:System.Drawing.dll DirectoryIconTool.cs
 ```
 
 ### Files
