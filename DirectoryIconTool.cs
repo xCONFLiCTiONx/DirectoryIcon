@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace DirectoryIconTool
 {
@@ -36,7 +37,7 @@ namespace DirectoryIconTool
 
         private void InitializeComponent()
         {
-            this.Text = "Windows Directory Icon Tool";
+            this.Text = "Windows Directory Icon Tool (Admin)";
             this.Size = new Size(500, 320);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -45,7 +46,7 @@ namespace DirectoryIconTool
             this.BackColor = Color.White;
 
             Label lblFolder = new Label() { Text = "Step 1: Select Folder", Left = 20, Top = 20, Width = 150, Font = new Font("Segoe UI", 9F, FontStyle.Bold) };
-            txtFolderPath = new TextBox() { Left = 20, Top = 45, Width = 350, ReadOnly = true, BackColor = Color.WhiteSmoke };
+            txtFolderPath = new TextBox() { Left = 20, Top = 45, Width = 350, BackColor = Color.White };
             btnBrowseFolder = new Button() { Text = "Browse...", Left = 380, Top = 43, Width = 80, FlatStyle = FlatStyle.System };
             btnBrowseFolder.Click += BtnBrowseFolder_Click;
 
@@ -149,14 +150,14 @@ namespace DirectoryIconTool
                 return;
             }
 
+            string folderPath = txtFolderPath.Text;
+            string fullIconPath = txtIconPath.Text;
+
             try
             {
-                string folderPath = txtFolderPath.Text;
-                string fullIconPath = txtIconPath.Text;
                 string iconPath = fullIconPath;
                 int index = selectedIconIndex;
 
-                // Parse manual input like "path,index"
                 if (fullIconPath.Contains(","))
                 {
                     int lastComma = fullIconPath.LastIndexOf(',');
@@ -171,9 +172,19 @@ namespace DirectoryIconTool
                     }
                 }
 
-                string iniPath = Path.Combine(folderPath, "desktop.ini");
+                if (!Directory.Exists(folderPath))
+                {
+                    MessageBox.Show("Target folder does not exist.");
+                    return;
+                }
 
-                // Remove attributes if exists to overwrite
+                lblStatus.Text = "Checking Known Folders...";
+                // Check if this is a known folder that needs registry modification
+                KnownFolderRegistry.ApplyToKnownFolderIfMatch(folderPath, iconPath, index);
+
+                string iniPath = Path.Combine(folderPath, "desktop.ini");
+                lblStatus.Text = "Preparing desktop.ini...";
+
                 if (File.Exists(iniPath))
                 {
                     File.SetAttributes(iniPath, FileAttributes.Normal);
@@ -182,6 +193,7 @@ namespace DirectoryIconTool
                 string[] lines = {
                     "[.ShellClassInfo]",
                     string.Format("IconResource={0},{1}", iconPath, index),
+                    "IconIndex=" + index,
                     "[ViewState]",
                     "Mode=",
                     "Vid=",
@@ -189,26 +201,89 @@ namespace DirectoryIconTool
                 };
 
                 File.WriteAllLines(iniPath, lines);
-
-                // Set desktop.ini attributes: Hidden + System
                 File.SetAttributes(iniPath, FileAttributes.Hidden | FileAttributes.System);
 
-                // Set folder attribute: ReadOnly (Required for Windows to read desktop.ini for icons)
+                lblStatus.Text = "Applying folder attributes...";
                 DirectoryInfo di = new DirectoryInfo(folderPath);
                 di.Attributes |= FileAttributes.ReadOnly;
+                try {
+                    di.Attributes |= FileAttributes.System;
+                } catch { }
 
-                lblStatus.Text = "Applying changes and refreshing...";
+                lblStatus.Text = "Notifying Windows Shell...";
+                ShellIconHelper.RefreshFolder(folderPath);
 
-                // Refresh shell
-                ShellIconHelper.RefreshShell();
-
-                MessageBox.Show("Icon applied successfully! Explorer has been notified of the change.");
-                lblStatus.Text = "Done.";
+                MessageBox.Show("Icon applied successfully!\nRegistry updated for known folders if applicable.", "Success");
+                lblStatus.Text = "Applied successfully.";
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Error: " + ex.Message);
+                MessageBox.Show("Error: " + ex.Message + "\n\nMake sure to run as Administrator.");
+                lblStatus.Text = "Failed.";
             }
+        }
+    }
+
+    public static class KnownFolderRegistry
+    {
+        private const string FolderDescriptionsPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderDescriptions";
+
+        // Known Folder GUIDs
+        private static readonly string FavoritesGuid = "{1777F761-68AD-4D8A-87BD-30B759FA33DD}";
+        private static readonly string SavedGamesGuid = "{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}";
+
+        public static void ApplyToKnownFolderIfMatch(string folderPath, string iconPath, int index)
+        {
+            string favoritesPath = GetKnownFolderPath(new Guid(FavoritesGuid));
+            string savedGamesPath = GetKnownFolderPath(new Guid(SavedGamesGuid));
+
+            if (string.Equals(folderPath.TrimEnd('\\'), favoritesPath.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            {
+                SetKnownFolderIcon(FavoritesGuid, iconPath, index);
+            }
+            else if (string.Equals(folderPath.TrimEnd('\\'), savedGamesPath.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            {
+                SetKnownFolderIcon(SavedGamesGuid, iconPath, index);
+            }
+        }
+
+        private static void SetKnownFolderIcon(string guid, string iconPath, int index)
+        {
+            try
+            {
+                using (RegistryKey hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+                {
+                    string subKeyPath = string.Format(@"{0}\{1}", FolderDescriptionsPath, guid);
+                    using (RegistryKey key = hklm.OpenSubKey(subKeyPath, true))
+                    {
+                        if (key != null)
+                        {
+                            string iconValue = string.Format("{0},{1}", iconPath, index);
+                            key.SetValue("Icon", iconValue, RegistryValueKind.ExpandString);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new Exception("Registry Update Failed: " + ex.Message);
+            }
+        }
+
+        [DllImport("shell32.dll")]
+        private static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid rfid, uint dwFlags, IntPtr hToken, out IntPtr pszPath);
+
+        private static string GetKnownFolderPath(Guid guid)
+        {
+            IntPtr pathPtr;
+            int result = SHGetKnownFolderPath(guid, 0, IntPtr.Zero, out pathPtr);
+            if (result == 0)
+            {
+                string path = Marshal.PtrToStringUni(pathPtr);
+                Marshal.FreeCoTaskMem(pathPtr);
+                return path;
+            }
+            return string.Empty;
         }
     }
 
@@ -264,7 +339,9 @@ namespace DirectoryIconTool
             listView.LargeImageList = imageList;
 
             int iconCount = ShellIconHelper.GetIconCount(filePath);
-            for (int i = 0; i < iconCount; i++)
+            int limit = Math.Min(iconCount, 500);
+
+            for (int i = 0; i < limit; i++)
             {
                 IntPtr hIcon = ShellIconHelper.ExtractIcon(filePath, i);
                 if (hIcon != IntPtr.Zero)
@@ -308,7 +385,9 @@ namespace DirectoryIconTool
         public static extern void SHChangeNotify(int wEventId, int uFlags, IntPtr dwItem1, IntPtr dwItem2);
 
         private const int SHCNE_ASSOCCHANGED = 0x08000000;
+        private const int SHCNE_UPDATEDIR = 0x00001000;
         private const int SHCNF_IDLIST = 0x0000;
+        private const int SHCNF_PATH = 0x0005;
 
         public static int GetIconCount(string filePath)
         {
@@ -325,6 +404,17 @@ namespace DirectoryIconTool
         public static void RefreshShell()
         {
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        public static void RefreshFolder(string path)
+        {
+            IntPtr pathPtr = Marshal.StringToHGlobalUni(path);
+            try {
+                SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATH, pathPtr, IntPtr.Zero);
+            } finally {
+                Marshal.FreeHGlobal(pathPtr);
+            }
+            RefreshShell();
         }
     }
 }
