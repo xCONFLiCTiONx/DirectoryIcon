@@ -50,7 +50,7 @@ namespace DirectoryIconTool
             btnBrowseFolder.Click += BtnBrowseFolder_Click;
 
             Label lblIcon = new Label() { Text = "Step 2: Select Icon Source (.ico, .dll, .exe)", Left = 20, Top = 85, Width = 300, Font = new Font("Segoe UI", 9F, FontStyle.Bold) };
-            txtIconPath = new TextBox() { Left = 20, Top = 110, Width = 350, ReadOnly = true, BackColor = Color.WhiteSmoke };
+            txtIconPath = new TextBox() { Left = 20, Top = 110, Width = 350, BackColor = Color.White };
             btnBrowseIcon = new Button() { Text = "Browse...", Left = 380, Top = 108, Width = 80, FlatStyle = FlatStyle.System };
             btnBrowseIcon.Click += BtnBrowseIcon_Click;
 
@@ -134,8 +134,8 @@ namespace DirectoryIconTool
             {
                 if (picker.ShowDialog() == DialogResult.OK)
                 {
-                    txtIconPath.Text = filePath;
                     selectedIconIndex = picker.SelectedIndex;
+                    txtIconPath.Text = string.Format("{0},{1}", filePath, selectedIconIndex);
                     lblStatus.Text = string.Format("Selected icon index: {0}", selectedIconIndex);
                 }
             }
@@ -152,7 +152,25 @@ namespace DirectoryIconTool
             try
             {
                 string folderPath = txtFolderPath.Text;
-                string iconPath = txtIconPath.Text;
+                string fullIconPath = txtIconPath.Text;
+                string iconPath = fullIconPath;
+                int index = selectedIconIndex;
+
+                // Parse manual input like "path,index"
+                if (fullIconPath.Contains(","))
+                {
+                    int lastComma = fullIconPath.LastIndexOf(',');
+                    string partBefore = fullIconPath.Substring(0, lastComma);
+                    string partAfter = fullIconPath.Substring(lastComma + 1);
+
+                    int parsedIndex;
+                    if (int.TryParse(partAfter, out parsedIndex))
+                    {
+                        iconPath = partBefore;
+                        index = parsedIndex;
+                    }
+                }
+
                 string iniPath = Path.Combine(folderPath, "desktop.ini");
 
                 // Remove attributes if exists to overwrite
@@ -163,7 +181,7 @@ namespace DirectoryIconTool
 
                 string[] lines = {
                     "[.ShellClassInfo]",
-                    string.Format("IconResource={0},{1}", iconPath, selectedIconIndex),
+                    string.Format("IconResource={0},{1}", iconPath, index),
                     "[ViewState]",
                     "Mode=",
                     "Vid=",
