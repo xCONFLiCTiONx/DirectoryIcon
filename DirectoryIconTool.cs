@@ -62,6 +62,19 @@ namespace DirectoryIconTool
                 LoadFolderAttributes(initialFolder);
             }
             _isLoading = false;
+            ThemeHelper.ApplyTheme(this);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            if (m.Msg == 0x001A) // WM_SETTINGCHANGE
+            {
+                if (m.LParam != IntPtr.Zero && Marshal.PtrToStringAuto(m.LParam) == "ImmersiveColorSet")
+                {
+                    ThemeHelper.ApplyTheme(this);
+                }
+            }
         }
 
         private void InitializeComponent()
@@ -118,7 +131,7 @@ namespace DirectoryIconTool
             btnApply = new Button() { Text = "Write desktop.ini and Refresh Icon", Left = 20, Top = 350, Width = 460, Height = 45, FlatStyle = FlatStyle.System, Font = new Font("Segoe UI", 10F, FontStyle.Bold) };
             btnApply.Click += BtnApply_Click;
 
-            btnRestartExplorer = new Button() { Text = "Restart Windows Explorer (Force Refresh)", Left = 20, Top = 405, Width = 460, Height = 30, FlatStyle = FlatStyle.Flat };
+            btnRestartExplorer = new Button() { Name = "btnRestartExplorer", Text = "Restart Windows Explorer (Force Refresh)", Left = 20, Top = 405, Width = 460, Height = 30, FlatStyle = FlatStyle.Flat };
             btnRestartExplorer.FlatAppearance.BorderSize = 1;
             btnRestartExplorer.Click += BtnRestartExplorer_Click;
 
@@ -148,6 +161,8 @@ namespace DirectoryIconTool
             this.Controls.Add(btnApply);
             this.Controls.Add(btnRestartExplorer);
             this.Controls.Add(lblStatus);
+
+            ThemeHelper.ApplyTheme(this);
         }
 
         private void LoadFolderAttributes(string folderPath)
@@ -511,6 +526,120 @@ namespace DirectoryIconTool
         public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
     }
 
+    public static class ThemeHelper
+    {
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
+        public static bool IsDarkMode()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                {
+                    if (key != null)
+                    {
+                        object val = key.GetValue("AppsUseLightTheme");
+                        if (val != null) return (int)val == 0;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        public static void ApplyTheme(Form form)
+        {
+            bool isDark = IsDarkMode();
+
+            // Set Dark Title Bar (Windows 10 1903+ / Windows 11)
+            int useDark = isDark ? 1 : 0;
+            DwmSetWindowAttribute(form.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDark, sizeof(int));
+
+            Color backColor = isDark ? Color.FromArgb(32, 32, 32) : Color.White;
+            Color textColor = isDark ? Color.White : Color.Black;
+            Color secondaryBack = isDark ? Color.FromArgb(45, 45, 45) : Color.FromArgb(240, 240, 240);
+            Color controlBack = isDark ? Color.FromArgb(50, 50, 50) : Color.White;
+            Color controlText = isDark ? Color.White : Color.Black;
+
+            form.BackColor = backColor;
+            form.ForeColor = textColor;
+
+            foreach (Control ctrl in form.Controls)
+            {
+                ApplyToControl(ctrl, isDark, backColor, textColor, secondaryBack, controlBack, controlText);
+            }
+        }
+
+        private static void ApplyToControl(Control ctrl, bool isDark, Color backColor, Color textColor, Color secondaryBack, Color controlBack, Color controlText)
+        {
+            if (ctrl is Label)
+            {
+                if (ctrl.BackColor != Color.Transparent && ctrl.BackColor != backColor)
+                    ctrl.BackColor = secondaryBack;
+
+                if (ctrl.ForeColor == Color.Gray || ctrl.ForeColor == Color.LightGray)
+                    ctrl.ForeColor = isDark ? Color.LightGray : Color.Gray;
+                else
+                    ctrl.ForeColor = textColor;
+            }
+            else if (ctrl is TextBox)
+            {
+                ctrl.BackColor = controlBack;
+                ctrl.ForeColor = controlText;
+            }
+            else if (ctrl is CheckBox)
+            {
+                ctrl.ForeColor = textColor;
+                ctrl.BackColor = Color.Transparent;
+            }
+            else if (ctrl is Button)
+            {
+                Button btn = (Button)ctrl;
+                if (isDark)
+                {
+                    btn.FlatStyle = FlatStyle.Flat;
+                    btn.BackColor = controlBack;
+                    btn.ForeColor = controlText;
+                    btn.FlatAppearance.BorderColor = Color.FromArgb(100, 100, 100);
+                }
+                else
+                {
+                    if (btn.Text.Contains("Restart Windows Explorer"))
+                    {
+                        btn.FlatStyle = FlatStyle.Flat;
+                        btn.BackColor = Color.White;
+                        btn.ForeColor = Color.Black;
+                        btn.FlatAppearance.BorderColor = Color.Gray;
+                    }
+                    else
+                    {
+                        btn.FlatStyle = FlatStyle.System;
+                    }
+                }
+            }
+            else if (ctrl is ListView)
+            {
+                ListView lv = (ListView)ctrl;
+                lv.BackColor = controlBack;
+                lv.ForeColor = controlText;
+            }
+            else if (ctrl is Panel)
+            {
+                Panel pnl = (Panel)ctrl;
+                pnl.BackColor = isDark ? Color.FromArgb(40, 40, 40) : Color.FromArgb(245, 245, 245);
+            }
+
+            // Recursive for nested controls
+            foreach (Control sub in ctrl.Controls)
+            {
+                ApplyToControl(sub, isDark, backColor, textColor, secondaryBack, controlBack, controlText);
+            }
+        }
+    }
+
     public static class KnownFolderRegistry
     {
         private const string FolderDescriptionsPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderDescriptions";
@@ -632,6 +761,8 @@ namespace DirectoryIconTool
 
             this.Controls.Add(listView);
             this.Controls.Add(bottomPanel);
+
+            ThemeHelper.ApplyTheme(this);
         }
 
         private void LoadIcons()
