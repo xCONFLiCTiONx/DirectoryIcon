@@ -1,3 +1,5 @@
+<img src="icon.ico" alt="Weather Watcher Logo" width="64" align="left" style="margin-right: 20px; border-radius: 10px;">
+
 # Windows Directory Icon Tool
 
 A professional C# GUI utility designed to easily customize folder icons on Windows. It handles standard directories as well as "stubborn" system folders (like Favorites, Downloads, etc.) by combining `desktop.ini` customization with Windows Registry overrides.
