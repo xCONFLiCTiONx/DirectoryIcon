@@ -59,6 +59,16 @@ namespace DirectoryIconTool
         {
             _isLoading = true;
             InitializeComponent();
+
+            try
+            {
+                if (File.Exists("icon.ico"))
+                {
+                    this.Icon = new Icon("icon.ico");
+                }
+            }
+            catch { }
+
             txtFolderPath.Text = initialFolder;
             LoadExplorerSettings();
             if (!string.IsNullOrEmpty(initialFolder))
@@ -188,6 +198,8 @@ namespace DirectoryIconTool
                 }
 
                 string iniPath = Path.Combine(folderPath, "desktop.ini");
+                bool foundIcon = false;
+
                 if (File.Exists(iniPath))
                 {
                     FileAttributes attr = File.GetAttributes(iniPath);
@@ -195,22 +207,40 @@ namespace DirectoryIconTool
                     chkSetSystem.Checked = (attr & FileAttributes.System) == FileAttributes.System;
                     chkSetReadOnly.Checked = (attr & FileAttributes.ReadOnly) == FileAttributes.ReadOnly;
 
-                    ParseExistingIni(iniPath);
+                    foundIcon = ParseExistingIni(iniPath);
                 }
-                else
+
+                if (!foundIcon)
                 {
-                    chkSetHidden.Checked = true;
-                    chkSetSystem.Checked = true;
-                    chkSetReadOnly.Checked = false;
-                    txtIconPath.Text = "";
-                    selectedIconIndex = 0;
+                    string defaultKnownIcon = KnownFolderRegistry.GetDefaultIconIfKnownFolder(folderPath);
+                    if (!string.IsNullOrEmpty(defaultKnownIcon))
+                    {
+                        txtIconPath.Text = defaultKnownIcon;
+                        if (defaultKnownIcon.Contains(","))
+                        {
+                            int lastComma = defaultKnownIcon.LastIndexOf(',');
+                            int.TryParse(defaultKnownIcon.Substring(lastComma + 1), out selectedIconIndex);
+                        }
+                    }
+                    else
+                    {
+                        txtIconPath.Text = "";
+                        selectedIconIndex = 0;
+                    }
+
+                    if (!File.Exists(iniPath))
+                    {
+                        chkSetHidden.Checked = true;
+                        chkSetSystem.Checked = true;
+                        chkSetReadOnly.Checked = false;
+                    }
                 }
             }
             catch { }
             finally { _isLoading = oldLoading; }
         }
 
-        private void ParseExistingIni(string iniPath)
+        private bool ParseExistingIni(string iniPath)
         {
             try
             {
@@ -227,11 +257,12 @@ namespace DirectoryIconTool
                             int lastComma = res.LastIndexOf(',');
                             int.TryParse(res.Substring(lastComma + 1), out selectedIconIndex);
                         }
-                        break;
+                        return true;
                     }
                 }
             }
             catch { }
+            return false;
         }
 
         private void ApplyFolderAttributesImmediately()
@@ -392,7 +423,6 @@ namespace DirectoryIconTool
 
         private void BtnBrowseIcon_Click(object sender, EventArgs e)
         {
-            // Use Windows built-in PickIconDlg, default to imageres.dll if empty
             StringBuilder iconPathBuilder = new StringBuilder(260);
             if (!string.IsNullOrEmpty(txtIconPath.Text))
             {
@@ -440,10 +470,8 @@ namespace DirectoryIconTool
                     lblStatus.Text = "Resetting folder and desktop.ini to default...";
                     KnownFolderRegistry.ResetFolderOrKnownFolder(folderPath);
 
-                    txtIconPath.Text = "";
-                    selectedIconIndex = 0;
+                    LoadFolderAttributes(folderPath);
 
-                    // Refresh shell
                     IntPtr pathPtr = Marshal.StringToHGlobalUni(folderPath);
                     try
                     {
@@ -455,7 +483,6 @@ namespace DirectoryIconTool
                         Marshal.FreeHGlobal(pathPtr);
                     }
 
-                    LoadFolderAttributes(folderPath);
                     MessageBox.Show("Folder reset to default successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     lblStatus.Text = "Reset to default complete.";
                 }
@@ -514,13 +541,16 @@ namespace DirectoryIconTool
                     File.SetAttributes(iniPath, FileAttributes.Normal);
                 }
 
-                string[] lines = {
-                    "[.ShellClassInfo]",
-                    string.Format("IconResource={0},{1}", iconPath, index),
-                    "IconIndex=" + index
-                };
+                string localizedName = KnownFolderRegistry.GetLocalizedResourceName(folderPath);
+                List<string> lines = new List<string> { "[.ShellClassInfo]" };
+                if (!string.IsNullOrEmpty(localizedName))
+                {
+                    lines.Add("LocalizedResourceName=" + localizedName);
+                }
+                lines.Add(string.Format("IconResource={0},{1}", iconPath, index));
+                lines.Add("IconIndex=" + index);
 
-                File.WriteAllLines(iniPath, lines);
+                File.WriteAllLines(iniPath, lines.ToArray());
 
                 FileAttributes iniAttrs = FileAttributes.Normal;
                 if (chkSetHidden.Checked) iniAttrs |= FileAttributes.Hidden;
@@ -550,6 +580,7 @@ namespace DirectoryIconTool
                     Marshal.FreeHGlobal(pathPtr);
                 }
 
+                LoadFolderAttributes(folderPath);
                 MessageBox.Show("Icon applied successfully!", "Success");
                 lblStatus.Text = "Applied successfully.";
             }
@@ -692,6 +723,12 @@ namespace DirectoryIconTool
         }
     }
 
+    public class KnownFolderInfo
+    {
+        public string DefaultIcon { get; set; }
+        public string LocalizedResourceName { get; set; }
+    }
+
     public static class KnownFolderRegistry
     {
         private const string FolderDescriptionsPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderDescriptions";
@@ -714,16 +751,16 @@ namespace DirectoryIconTool
             "{D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27}"  // System32
         };
 
-        private static readonly Dictionary<string, string> DefaultKnownFolderIcons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly Dictionary<string, KnownFolderInfo> KnownFoldersInfo = new Dictionary<string, KnownFolderInfo>(StringComparer.OrdinalIgnoreCase)
         {
-            { "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}", "%SystemRoot%\\system32\\imageres.dll,-183" }, // Desktop
-            { "{FDD39AD0-B39B-4249-939E-0291D7430030}", "%SystemRoot%\\system32\\imageres.dll,-112" }, // Documents
-            { "{374DE290-123F-4565-9164-39C4925E467B}", "%SystemRoot%\\system32\\imageres.dll,-184" }, // Downloads
-            { "{33E28130-4E1E-4676-835A-98395C3BC3BB}", "%SystemRoot%\\system32\\imageres.dll,-113" }, // Pictures
-            { "{4BD8D571-6D19-48D3-BE97-422220080E43}", "%SystemRoot%\\system32\\imageres.dll,-108" }, // Music
-            { "{18989B1D-99B5-455B-841C-AB7C74E4DDFC}", "%SystemRoot%\\system32\\imageres.dll,-189" }, // Videos
-            { "{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}", "%SystemRoot%\\system32\\imageres.dll,-129" }, // Saved Games
-            { "{1777F761-68AD-4D8A-87BD-30B759FA33DD}", "%SystemRoot%\\system32\\shell32.dll,-125" }   // Favorites
+            { "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}", new KnownFolderInfo { DefaultIcon = "%SystemRoot%\\system32\\imageres.dll,-183", LocalizedResourceName = "@%SystemRoot%\\system32\\shell32.dll,-21769" } }, // Desktop
+            { "{FDD39AD0-B39B-4249-939E-0291D7430030}", new KnownFolderInfo { DefaultIcon = "%SystemRoot%\\system32\\imageres.dll,-112", LocalizedResourceName = "@%SystemRoot%\\system32\\shell32.dll,-21770" } }, // Documents
+            { "{374DE290-123F-4565-9164-39C4925E467B}", new KnownFolderInfo { DefaultIcon = "%SystemRoot%\\system32\\imageres.dll,-184", LocalizedResourceName = "@%SystemRoot%\\system32\\shell32.dll,-21798" } }, // Downloads
+            { "{33E28130-4E1E-4676-835A-98395C3BC3BB}", new KnownFolderInfo { DefaultIcon = "%SystemRoot%\\system32\\imageres.dll,-113", LocalizedResourceName = "@%SystemRoot%\\system32\\shell32.dll,-21779" } }, // Pictures
+            { "{4BD8D571-6D19-48D3-BE97-422220080E43}", new KnownFolderInfo { DefaultIcon = "%SystemRoot%\\system32\\imageres.dll,-108", LocalizedResourceName = "@%SystemRoot%\\system32\\shell32.dll,-21778" } }, // Music
+            { "{18989B1D-99B5-455B-841C-AB7C74E4DDFC}", new KnownFolderInfo { DefaultIcon = "%SystemRoot%\\system32\\imageres.dll,-189", LocalizedResourceName = "@%SystemRoot%\\system32\\shell32.dll,-21780" } }, // Videos
+            { "{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}", new KnownFolderInfo { DefaultIcon = "%SystemRoot%\\system32\\imageres.dll,-129", LocalizedResourceName = "@%SystemRoot%\\system32\\shell32.dll,-21790" } }, // Saved Games
+            { "{1777F761-68AD-4D8A-87BD-30B759FA33DD}", new KnownFolderInfo { DefaultIcon = "%SystemRoot%\\system32\\shell32.dll,-125", LocalizedResourceName = "@%SystemRoot%\\system32\\shell32.dll,-21791" } }    // Favorites
         };
 
         public static void ApplyToKnownFolderIfMatch(string folderPath, string iconPath, int index)
@@ -741,61 +778,115 @@ namespace DirectoryIconTool
             }
         }
 
-        public static void ResetFolderOrKnownFolder(string folderPath)
+        public static string GetDefaultIconIfKnownFolder(string folderPath)
         {
             string targetPath = folderPath.TrimEnd('\\');
-            bool isKnownFolder = false;
-            string matchedGuid = null;
 
-            foreach (string guidStr in KnownFolderGuids)
+            foreach (var kvp in KnownFoldersInfo)
             {
-                string knownPath = GetKnownFolderPath(new Guid(guidStr));
+                string knownPath = GetKnownFolderPath(new Guid(kvp.Key));
                 if (!string.IsNullOrEmpty(knownPath) &&
                     string.Equals(targetPath, knownPath.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                 {
-                    isKnownFolder = true;
-                    matchedGuid = guidStr;
+                    return kvp.Value.DefaultIcon;
+                }
+            }
+            return null;
+        }
+
+        public static string GetLocalizedResourceName(string folderPath)
+        {
+            string targetPath = folderPath.TrimEnd('\\');
+
+            foreach (var kvp in KnownFoldersInfo)
+            {
+                string knownPath = GetKnownFolderPath(new Guid(kvp.Key));
+                if (!string.IsNullOrEmpty(knownPath) &&
+                    string.Equals(targetPath, knownPath.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                {
+                    return kvp.Value.LocalizedResourceName;
+                }
+            }
+
+            string iniPath = Path.Combine(folderPath, "desktop.ini");
+            if (File.Exists(iniPath))
+            {
+                try
+                {
+                    string[] lines = File.ReadAllLines(iniPath);
+                    foreach (string line in lines)
+                    {
+                        if (line.StartsWith("LocalizedResourceName=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return line.Substring(22).Trim();
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return null;
+        }
+
+        public static void ResetFolderOrKnownFolder(string folderPath)
+        {
+            string targetPath = folderPath.TrimEnd('\\');
+            KnownFolderInfo info = null;
+            string matchedGuid = null;
+
+            foreach (var kvp in KnownFoldersInfo)
+            {
+                string knownPath = GetKnownFolderPath(new Guid(kvp.Key));
+                if (!string.IsNullOrEmpty(knownPath) &&
+                    string.Equals(targetPath, knownPath.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                {
+                    info = kvp.Value;
+                    matchedGuid = kvp.Key;
                     break;
                 }
             }
 
             string iniPath = Path.Combine(folderPath, "desktop.ini");
 
-            if (isKnownFolder)
+            if (info != null)
             {
-                // Reset registry icon to default for this known folder
-                if (matchedGuid != null && DefaultKnownFolderIcons.ContainsKey(matchedGuid))
-                {
-                    SetKnownFolderIcon(matchedGuid, DefaultKnownFolderIcons[matchedGuid]);
-                }
+                SetKnownFolderIcon(matchedGuid, info.DefaultIcon);
 
-                // Clean desktop.ini without deleting it (preserve LocalizedResourceName and system attributes)
                 if (File.Exists(iniPath))
                 {
                     File.SetAttributes(iniPath, FileAttributes.Normal);
-                    List<string> newLines = new List<string>();
-                    string[] lines = File.ReadAllLines(iniPath);
-                    foreach (string line in lines)
-                    {
-                        if (!line.StartsWith("IconResource=", StringComparison.OrdinalIgnoreCase) &&
-                            !line.StartsWith("IconIndex=", StringComparison.OrdinalIgnoreCase))
-                        {
-                            newLines.Add(line);
-                        }
-                    }
-                    File.WriteAllLines(iniPath, newLines);
-                    File.SetAttributes(iniPath, FileAttributes.Hidden | FileAttributes.System);
                 }
+
+                int iconIndex = ParseIndexFromResource(info.DefaultIcon);
+                string[] lines = {
+                    "[.ShellClassInfo]",
+                    "LocalizedResourceName=" + info.LocalizedResourceName,
+                    "IconResource=" + info.DefaultIcon,
+                    "IconIndex=" + iconIndex
+                };
+                File.WriteAllLines(iniPath, lines);
+                File.SetAttributes(iniPath, FileAttributes.Hidden | FileAttributes.System);
             }
             else
             {
-                // Regular folder: safe to delete desktop.ini
                 if (File.Exists(iniPath))
                 {
                     File.SetAttributes(iniPath, FileAttributes.Normal);
                     File.Delete(iniPath);
                 }
             }
+        }
+
+        private static int ParseIndexFromResource(string resourceStr)
+        {
+            if (string.IsNullOrEmpty(resourceStr)) return 0;
+            if (resourceStr.Contains(","))
+            {
+                int lastComma = resourceStr.LastIndexOf(',');
+                int.TryParse(resourceStr.Substring(lastComma + 1), out int idx);
+                return idx;
+            }
+            return 0;
         }
 
         private static void SetKnownFolderIcon(string guid, string iconValue)
