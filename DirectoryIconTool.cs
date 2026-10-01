@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -33,21 +34,24 @@ namespace DirectoryIconTool
         private TextBox txtIconPath;
         private Button btnBrowseIcon;
         private Button btnApply;
+        private Button btnResetDefault;
         private Button btnRestartExplorer;
         private Label lblStatus;
         private int selectedIconIndex = 0;
 
-        // Checkboxes
+        // Checkboxes for Explorer settings
         private CheckBox chkShowHidden;
         private CheckBox chkShowSystem;
-        private CheckBox chkSetHidden;
-        private CheckBox chkSetSystem;
-        private CheckBox chkSetReadOnly;
 
-        // Folder Checkboxes
+        // Folder Attributes Checkboxes
         private CheckBox chkFolderReadOnly;
         private CheckBox chkFolderSystem;
         private CheckBox chkFolderHidden;
+
+        // File Attributes Checkboxes (desktop.ini)
+        private CheckBox chkSetHidden;
+        private CheckBox chkSetSystem;
+        private CheckBox chkSetReadOnly;
 
         private bool _isLoading = false;
 
@@ -80,7 +84,7 @@ namespace DirectoryIconTool
         private void InitializeComponent()
         {
             this.Text = "Windows Directory Icon Tool (Admin)";
-            this.Size = new Size(520, 580);
+            this.Size = new Size(520, 560);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -128,14 +132,17 @@ namespace DirectoryIconTool
             chkSetSystem.Click += (s, e) => ApplyIniAttributesImmediately();
             chkSetReadOnly.Click += (s, e) => ApplyIniAttributesImmediately();
 
-            btnApply = new Button() { Text = "Write desktop.ini and Refresh Icon", Left = 20, Top = 350, Width = 460, Height = 45, FlatStyle = FlatStyle.System, Font = new Font("Segoe UI", 10F, FontStyle.Bold) };
+            btnApply = new Button() { Text = "Write desktop.ini and Refresh Icon", Left = 20, Top = 345, Width = 460, Height = 40, FlatStyle = FlatStyle.System, Font = new Font("Segoe UI", 10F, FontStyle.Bold) };
             btnApply.Click += BtnApply_Click;
 
-            btnRestartExplorer = new Button() { Name = "btnRestartExplorer", Text = "Restart Windows Explorer (Force Refresh)", Left = 20, Top = 405, Width = 460, Height = 30, FlatStyle = FlatStyle.Flat };
+            btnResetDefault = new Button() { Text = "Reset Folder & desktop.ini to Default", Left = 20, Top = 390, Width = 460, Height = 30, FlatStyle = FlatStyle.System };
+            btnResetDefault.Click += BtnResetDefault_Click;
+
+            btnRestartExplorer = new Button() { Name = "btnRestartExplorer", Text = "Restart Windows Explorer (Force Refresh)", Left = 20, Top = 425, Width = 460, Height = 30, FlatStyle = FlatStyle.Flat };
             btnRestartExplorer.FlatAppearance.BorderSize = 1;
             btnRestartExplorer.Click += BtnRestartExplorer_Click;
 
-            lblStatus = new Label() { Text = "Ready", Left = 20, Top = 450, Width = 460, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.Gray };
+            lblStatus = new Label() { Text = "Ready", Left = 20, Top = 465, Width = 460, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.Gray };
 
             this.Controls.Add(lblFolder);
             this.Controls.Add(txtFolderPath);
@@ -159,6 +166,7 @@ namespace DirectoryIconTool
             this.Controls.Add(chkSetReadOnly);
 
             this.Controls.Add(btnApply);
+            this.Controls.Add(btnResetDefault);
             this.Controls.Add(btnRestartExplorer);
             this.Controls.Add(lblStatus);
 
@@ -194,6 +202,8 @@ namespace DirectoryIconTool
                     chkSetHidden.Checked = true;
                     chkSetSystem.Checked = true;
                     chkSetReadOnly.Checked = false;
+                    txtIconPath.Text = "";
+                    selectedIconIndex = 0;
                 }
             }
             catch { }
@@ -241,7 +251,6 @@ namespace DirectoryIconTool
 
                 File.SetAttributes(folderPath, attr);
 
-                // Robust refresh from xToolsMenu logic
                 IntPtr pathPtr = Marshal.StringToHGlobalUni(folderPath);
                 try {
                     SHChangeNotify(SHCNE_ATTRIBUTES, SHCNF_PATH, pathPtr, IntPtr.Zero);
@@ -334,7 +343,6 @@ namespace DirectoryIconTool
                         key.SetValue("Hidden", chkShowHidden.Checked ? 1 : 2, RegistryValueKind.DWord);
                         key.SetValue("ShowSuperHidden", chkShowSystem.Checked ? 1 : 0, RegistryValueKind.DWord);
 
-                        // Broadast "ShellState" change
                         IntPtr result;
                         SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, IntPtr.Zero, "ShellState", SMTO_ABORTIFHUNG, 5000, out result);
 
@@ -384,34 +392,84 @@ namespace DirectoryIconTool
 
         private void BtnBrowseIcon_Click(object sender, EventArgs e)
         {
-            using (OpenFileDialog ofd = new OpenFileDialog())
+            // Use Windows built-in PickIconDlg, default to imageres.dll if empty
+            StringBuilder iconPathBuilder = new StringBuilder(260);
+            if (!string.IsNullOrEmpty(txtIconPath.Text))
             {
-                ofd.Filter = "Icon Files|*.ico;*.dll;*.exe|All Files|*.*";
-                if (ofd.ShowDialog() == DialogResult.OK)
+                string currentPath = txtIconPath.Text;
+                if (currentPath.Contains(","))
                 {
-                    string ext = Path.GetExtension(ofd.FileName).ToLower();
-                    if (ext == ".dll" || ext == ".exe")
-                    {
-                        ShowIconPicker(ofd.FileName);
-                    }
-                    else
-                    {
-                        txtIconPath.Text = ofd.FileName;
-                        selectedIconIndex = 0;
-                    }
+                    int lastComma = currentPath.LastIndexOf(',');
+                    iconPathBuilder.Append(currentPath.Substring(0, lastComma));
+                    int.TryParse(currentPath.Substring(lastComma + 1), out selectedIconIndex);
                 }
+                else
+                {
+                    iconPathBuilder.Append(currentPath);
+                }
+            }
+            else
+            {
+                iconPathBuilder.Append(Path.Combine(Environment.SystemDirectory, "imageres.dll"));
+                selectedIconIndex = 0;
+            }
+
+            int iconIndex = selectedIconIndex;
+            int result = PickIconDlg(this.Handle, iconPathBuilder, iconPathBuilder.Capacity, ref iconIndex);
+            if (result != 0)
+            {
+                selectedIconIndex = iconIndex;
+                txtIconPath.Text = string.Format("{0},{1}", iconPathBuilder.ToString(), selectedIconIndex);
+                lblStatus.Text = string.Format("Selected icon: {0}, Index: {1}", iconPathBuilder.ToString(), selectedIconIndex);
             }
         }
 
-        private void ShowIconPicker(string filePath)
+        private void BtnResetDefault_Click(object sender, EventArgs e)
         {
-            using (IconPickerForm picker = new IconPickerForm(filePath))
+            string folderPath = txtFolderPath.Text;
+            if (string.IsNullOrEmpty(folderPath) || !Directory.Exists(folderPath))
             {
-                if (picker.ShowDialog() == DialogResult.OK)
+                MessageBox.Show("Please select a valid folder first.", "Reset Default", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (MessageBox.Show("This will remove the custom desktop.ini and reset the folder icon to default. Continue?", "Reset to Default", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            {
+                try
                 {
-                    selectedIconIndex = picker.SelectedIndex;
-                    txtIconPath.Text = string.Format("{0},{1}", filePath, selectedIconIndex);
-                    lblStatus.Text = string.Format("Selected icon index: {0}", selectedIconIndex);
+                    lblStatus.Text = "Resetting Known Folder registration if applicable...";
+                    KnownFolderRegistry.ResetKnownFolderIfMatch(folderPath);
+
+                    string iniPath = Path.Combine(folderPath, "desktop.ini");
+                    if (File.Exists(iniPath))
+                    {
+                        File.SetAttributes(iniPath, FileAttributes.Normal);
+                        File.Delete(iniPath);
+                    }
+
+                    txtIconPath.Text = "";
+                    selectedIconIndex = 0;
+
+                    // Refresh shell
+                    IntPtr pathPtr = Marshal.StringToHGlobalUni(folderPath);
+                    try
+                    {
+                        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
+                        SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATH, pathPtr, IntPtr.Zero);
+                    }
+                    finally
+                    {
+                        Marshal.FreeHGlobal(pathPtr);
+                    }
+
+                    LoadFolderAttributes(folderPath);
+                    MessageBox.Show("Folder reset to default successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    lblStatus.Text = "Reset to default complete.";
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Error resetting folder: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    lblStatus.Text = "Reset failed.";
                 }
             }
         }
@@ -491,10 +549,10 @@ namespace DirectoryIconTool
 
                 lblStatus.Text = "Notifying Windows Shell...";
 
-                // Final targeted notify
                 IntPtr pathPtr = Marshal.StringToHGlobalUni(folderPath);
                 try {
                     SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATH, pathPtr, IntPtr.Zero);
+                    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
                 } finally {
                     Marshal.FreeHGlobal(pathPtr);
                 }
@@ -521,6 +579,9 @@ namespace DirectoryIconTool
 
         [DllImport("shell32.dll", CharSet = CharSet.Auto)]
         public static extern void SHChangeNotify(int wEventId, int uFlags, IntPtr dwItem1, IntPtr dwItem2);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+        public static extern int PickIconDlg(IntPtr hwnd, StringBuilder pszIconPath, int cchIconPath, ref int piIconIndex);
 
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
@@ -554,7 +615,6 @@ namespace DirectoryIconTool
         {
             bool isDark = IsDarkMode();
 
-            // Set Dark Title Bar (Windows 10 1903+ / Windows 11)
             int useDark = isDark ? 1 : 0;
             DwmSetWindowAttribute(form.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDark, sizeof(int));
 
@@ -607,7 +667,7 @@ namespace DirectoryIconTool
                 }
                 else
                 {
-                    if (btn.Text.Contains("Restart Windows Explorer"))
+                    if (btn.Name == "btnRestartExplorer")
                     {
                         btn.FlatStyle = FlatStyle.Flat;
                         btn.BackColor = Color.White;
@@ -632,7 +692,6 @@ namespace DirectoryIconTool
                 pnl.BackColor = isDark ? Color.FromArgb(40, 40, 40) : Color.FromArgb(245, 245, 245);
             }
 
-            // Recursive for nested controls
             foreach (Control sub in ctrl.Controls)
             {
                 ApplyToControl(sub, isDark, backColor, textColor, secondaryBack, controlBack, controlText);
@@ -644,7 +703,6 @@ namespace DirectoryIconTool
     {
         private const string FolderDescriptionsPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderDescriptions";
 
-        // Comprehensive list of common Known Folder GUIDs
         private static readonly string[] KnownFolderGuids = {
             "{1777F761-68AD-4D8A-87BD-30B759FA33DD}", // Favorites
             "{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}", // Saved Games
@@ -674,7 +732,21 @@ namespace DirectoryIconTool
                     string.Equals(targetPath, knownPath.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                 {
                     SetKnownFolderIcon(guidStr, iconPath, index);
-                    // Continue loop in case folder represents multiple GUIDs (rare but possible)
+                }
+            }
+        }
+
+        public static void ResetKnownFolderIfMatch(string folderPath)
+        {
+            string targetPath = folderPath.TrimEnd('\\');
+
+            foreach (string guidStr in KnownFolderGuids)
+            {
+                string knownPath = GetKnownFolderPath(new Guid(guidStr));
+                if (!string.IsNullOrEmpty(knownPath) &&
+                    string.Equals(targetPath, knownPath.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                {
+                    RemoveKnownFolderIcon(guidStr);
                 }
             }
         }
@@ -702,6 +774,31 @@ namespace DirectoryIconTool
             }
         }
 
+        private static void RemoveKnownFolderIcon(string guid)
+        {
+            try
+            {
+                using (RegistryKey hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+                {
+                    string subKeyPath = string.Format(@"{0}\{1}", FolderDescriptionsPath, guid);
+                    using (RegistryKey key = hklm.OpenSubKey(subKeyPath, true))
+                    {
+                        if (key != null)
+                        {
+                            if (key.GetValue("Icon") != null)
+                            {
+                                key.DeleteValue("Icon");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new Exception("Registry Reset Failed: " + ex.Message);
+            }
+        }
+
         [DllImport("shell32.dll")]
         private static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid rfid, uint dwFlags, IntPtr hToken, out IntPtr pszPath);
 
@@ -716,115 +813,6 @@ namespace DirectoryIconTool
                 return path;
             }
             return string.Empty;
-        }
-    }
-
-    public class IconPickerForm : Form
-    {
-        private int _selectedIndex = 0;
-        public int SelectedIndex { get { return _selectedIndex; } private set { _selectedIndex = value; } }
-        private ListView listView;
-        private string filePath;
-
-        public IconPickerForm(string filePath)
-        {
-            this.filePath = filePath;
-            InitializeComponent();
-            LoadIcons();
-        }
-
-        private void InitializeComponent()
-        {
-            this.Text = "Select Icon from " + Path.GetFileName(filePath);
-            this.Size = new Size(600, 500);
-            this.StartPosition = FormStartPosition.CenterParent;
-            this.Font = new Font("Segoe UI", 9F);
-            this.BackColor = Color.White;
-
-            listView = new ListView();
-            listView.Dock = DockStyle.Fill;
-            listView.View = View.LargeIcon;
-            listView.MultiSelect = false;
-            listView.BackColor = Color.White;
-            listView.BorderStyle = BorderStyle.None;
-            listView.DoubleClick += (s, e) => { ConfirmSelection(); };
-
-            Panel bottomPanel = new Panel() { Dock = DockStyle.Bottom, Height = 60, Padding = new Padding(10) };
-            Button btnOk = new Button() { Text = "Select Icon", Dock = DockStyle.Right, Width = 120, FlatStyle = FlatStyle.System, Font = new Font("Segoe UI", 9F, FontStyle.Bold) };
-            btnOk.Click += (s, e) => { ConfirmSelection(); };
-
-            Button btnCancel = new Button() { Text = "Cancel", Dock = DockStyle.Left, Width = 100, FlatStyle = FlatStyle.System };
-            btnCancel.Click += (s, e) => { this.DialogResult = DialogResult.Cancel; this.Close(); };
-
-            bottomPanel.Controls.Add(btnOk);
-            bottomPanel.Controls.Add(btnCancel);
-
-            this.Controls.Add(listView);
-            this.Controls.Add(bottomPanel);
-
-            ThemeHelper.ApplyTheme(this);
-        }
-
-        private void LoadIcons()
-        {
-            ImageList imageList = new ImageList();
-            imageList.ImageSize = new Size(32, 32);
-            imageList.ColorDepth = ColorDepth.Depth32Bit;
-            listView.LargeImageList = imageList;
-
-            int iconCount = ShellIconHelper.GetIconCount(filePath);
-            int limit = Math.Min(iconCount, 500);
-
-            for (int i = 0; i < limit; i++)
-            {
-                IntPtr hIcon = ShellIconHelper.ExtractIcon(filePath, i);
-                if (hIcon != IntPtr.Zero)
-                {
-                    using (Icon icon = Icon.FromHandle(hIcon))
-                    {
-                        imageList.Images.Add(icon.ToBitmap());
-                        ListViewItem item = new ListViewItem(i.ToString(), i);
-                        listView.Items.Add(item);
-                    }
-                    ShellIconHelper.DestroyIcon(hIcon);
-                }
-            }
-        }
-
-        private void ConfirmSelection()
-        {
-            if (listView.SelectedItems.Count > 0)
-            {
-                SelectedIndex = listView.SelectedItems[0].Index;
-                this.DialogResult = DialogResult.OK;
-                this.Close();
-            }
-            else
-            {
-                MessageBox.Show("Please select an icon.");
-            }
-        }
-    }
-
-    public static class ShellIconHelper
-    {
-        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
-        public static extern int ExtractIconEx(string lpszFile, int nIconIndex, IntPtr[] phiconLarge, IntPtr[] phiconSmall, int nIcons);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool DestroyIcon(IntPtr hIcon);
-
-        public static int GetIconCount(string filePath)
-        {
-            return ExtractIconEx(filePath, -1, null, null, 0);
-        }
-
-        public static IntPtr ExtractIcon(string filePath, int index)
-        {
-            IntPtr[] largeIcons = new IntPtr[1];
-            ExtractIconEx(filePath, index, largeIcons, null, 1);
-            return largeIcons[0];
         }
     }
 }
