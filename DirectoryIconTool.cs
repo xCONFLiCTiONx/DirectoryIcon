@@ -433,19 +433,12 @@ namespace DirectoryIconTool
                 return;
             }
 
-            if (MessageBox.Show("This will remove the custom desktop.ini and reset the folder icon to default. Continue?", "Reset to Default", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            if (MessageBox.Show("This will reset the folder icon and desktop.ini to default. Continue?", "Reset to Default", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
             {
                 try
                 {
-                    lblStatus.Text = "Resetting Known Folder registration if applicable...";
-                    KnownFolderRegistry.ResetKnownFolderIfMatch(folderPath);
-
-                    string iniPath = Path.Combine(folderPath, "desktop.ini");
-                    if (File.Exists(iniPath))
-                    {
-                        File.SetAttributes(iniPath, FileAttributes.Normal);
-                        File.Delete(iniPath);
-                    }
+                    lblStatus.Text = "Resetting folder and desktop.ini to default...";
+                    KnownFolderRegistry.ResetFolderOrKnownFolder(folderPath);
 
                     txtIconPath.Text = "";
                     selectedIconIndex = 0;
@@ -721,6 +714,18 @@ namespace DirectoryIconTool
             "{D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27}"  // System32
         };
 
+        private static readonly Dictionary<string, string> DefaultKnownFolderIcons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}", "%SystemRoot%\\system32\\imageres.dll,-183" }, // Desktop
+            { "{FDD39AD0-B39B-4249-939E-0291D7430030}", "%SystemRoot%\\system32\\imageres.dll,-112" }, // Documents
+            { "{374DE290-123F-4565-9164-39C4925E467B}", "%SystemRoot%\\system32\\imageres.dll,-184" }, // Downloads
+            { "{33E28130-4E1E-4676-835A-98395C3BC3BB}", "%SystemRoot%\\system32\\imageres.dll,-113" }, // Pictures
+            { "{4BD8D571-6D19-48D3-BE97-422220080E43}", "%SystemRoot%\\system32\\imageres.dll,-108" }, // Music
+            { "{18989B1D-99B5-455B-841C-AB7C74E4DDFC}", "%SystemRoot%\\system32\\imageres.dll,-189" }, // Videos
+            { "{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}", "%SystemRoot%\\system32\\imageres.dll,-129" }, // Saved Games
+            { "{1777F761-68AD-4D8A-87BD-30B759FA33DD}", "%SystemRoot%\\system32\\shell32.dll,-125" }   // Favorites
+        };
+
         public static void ApplyToKnownFolderIfMatch(string folderPath, string iconPath, int index)
         {
             string targetPath = folderPath.TrimEnd('\\');
@@ -731,14 +736,16 @@ namespace DirectoryIconTool
                 if (!string.IsNullOrEmpty(knownPath) &&
                     string.Equals(targetPath, knownPath.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                 {
-                    SetKnownFolderIcon(guidStr, iconPath, index);
+                    SetKnownFolderIcon(guidStr, string.Format("{0},{1}", iconPath, index));
                 }
             }
         }
 
-        public static void ResetKnownFolderIfMatch(string folderPath)
+        public static void ResetFolderOrKnownFolder(string folderPath)
         {
             string targetPath = folderPath.TrimEnd('\\');
+            bool isKnownFolder = false;
+            string matchedGuid = null;
 
             foreach (string guidStr in KnownFolderGuids)
             {
@@ -746,12 +753,52 @@ namespace DirectoryIconTool
                 if (!string.IsNullOrEmpty(knownPath) &&
                     string.Equals(targetPath, knownPath.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                 {
-                    RemoveKnownFolderIcon(guidStr);
+                    isKnownFolder = true;
+                    matchedGuid = guidStr;
+                    break;
+                }
+            }
+
+            string iniPath = Path.Combine(folderPath, "desktop.ini");
+
+            if (isKnownFolder)
+            {
+                // Reset registry icon to default for this known folder
+                if (matchedGuid != null && DefaultKnownFolderIcons.ContainsKey(matchedGuid))
+                {
+                    SetKnownFolderIcon(matchedGuid, DefaultKnownFolderIcons[matchedGuid]);
+                }
+
+                // Clean desktop.ini without deleting it (preserve LocalizedResourceName and system attributes)
+                if (File.Exists(iniPath))
+                {
+                    File.SetAttributes(iniPath, FileAttributes.Normal);
+                    List<string> newLines = new List<string>();
+                    string[] lines = File.ReadAllLines(iniPath);
+                    foreach (string line in lines)
+                    {
+                        if (!line.StartsWith("IconResource=", StringComparison.OrdinalIgnoreCase) &&
+                            !line.StartsWith("IconIndex=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            newLines.Add(line);
+                        }
+                    }
+                    File.WriteAllLines(iniPath, newLines);
+                    File.SetAttributes(iniPath, FileAttributes.Hidden | FileAttributes.System);
+                }
+            }
+            else
+            {
+                // Regular folder: safe to delete desktop.ini
+                if (File.Exists(iniPath))
+                {
+                    File.SetAttributes(iniPath, FileAttributes.Normal);
+                    File.Delete(iniPath);
                 }
             }
         }
 
-        private static void SetKnownFolderIcon(string guid, string iconPath, int index)
+        private static void SetKnownFolderIcon(string guid, string iconValue)
         {
             try
             {
@@ -762,7 +809,6 @@ namespace DirectoryIconTool
                     {
                         if (key != null)
                         {
-                            string iconValue = string.Format("{0},{1}", iconPath, index);
                             key.SetValue("Icon", iconValue, RegistryValueKind.ExpandString);
                         }
                     }
@@ -770,32 +816,7 @@ namespace DirectoryIconTool
             }
             catch (Exception ex)
             {
-                throw new Exception("Registry Update Failed: " + ex.Message);
-            }
-        }
-
-        private static void RemoveKnownFolderIcon(string guid)
-        {
-            try
-            {
-                using (RegistryKey hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
-                {
-                    string subKeyPath = string.Format(@"{0}\{1}", FolderDescriptionsPath, guid);
-                    using (RegistryKey key = hklm.OpenSubKey(subKeyPath, true))
-                    {
-                        if (key != null)
-                        {
-                            if (key.GetValue("Icon") != null)
-                            {
-                                key.DeleteValue("Icon");
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                throw new Exception("Registry Reset Failed: " + ex.Message);
+                throw new Exception("Registry Reset/Update Failed: " + ex.Message);
             }
         }
 
