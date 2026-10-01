@@ -883,7 +883,8 @@ namespace DirectoryIconTool
             if (resourceStr.Contains(","))
             {
                 int lastComma = resourceStr.LastIndexOf(',');
-                int.TryParse(resourceStr.Substring(lastComma + 1), out int idx);
+                int idx;
+                int.TryParse(resourceStr.Substring(lastComma + 1), out idx);
                 return idx;
             }
             return 0;
