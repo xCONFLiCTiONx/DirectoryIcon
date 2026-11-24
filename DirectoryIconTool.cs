@@ -54,20 +54,14 @@ namespace DirectoryIconTool
         private CheckBox chkSetReadOnly;
 
         private bool _isLoading = false;
+        private IntPtr _smallIconHandle = IntPtr.Zero;
+        private IntPtr _bigIconHandle = IntPtr.Zero;
 
         public MainForm(string initialFolder)
         {
             _isLoading = true;
             InitializeComponent();
-
-            try
-            {
-                if (File.Exists("icon.ico"))
-                {
-                    this.Icon = new Icon("icon.ico");
-                }
-            }
-            catch { }
+            LoadFormIcon();
 
             txtFolderPath.Text = initialFolder;
             LoadExplorerSettings();
@@ -77,6 +71,78 @@ namespace DirectoryIconTool
             }
             _isLoading = false;
             ThemeHelper.ApplyTheme(this);
+        }
+
+        private void LoadFormIcon()
+        {
+            try
+            {
+                Icon exeIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                if (exeIcon != null)
+                {
+                    this.Icon = exeIcon;
+                    return;
+                }
+
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.ico");
+                if (File.Exists(iconPath))
+                {
+                    this.Icon = new Icon(iconPath);
+                }
+            }
+            catch { }
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            ApplyWin32WindowIcons();
+        }
+
+        private void ApplyWin32WindowIcons()
+        {
+            try
+            {
+                IntPtr hInstance = GetModuleHandle(null);
+                if (hInstance == IntPtr.Zero) return;
+
+                int smW = GetSystemMetrics(SM_CXSMICON);
+                int smH = GetSystemMetrics(SM_CYSMICON);
+                int bigW = GetSystemMetrics(SM_CXICON);
+                int bigH = GetSystemMetrics(SM_CYICON);
+
+                IntPtr hSmall = LoadImage(hInstance, (IntPtr)IDI_APPLICATION, IMAGE_ICON, smW, smH, LR_DEFAULTCOLOR);
+                if (hSmall != IntPtr.Zero)
+                {
+                    if (_smallIconHandle != IntPtr.Zero) DestroyIcon(_smallIconHandle);
+                    _smallIconHandle = hSmall;
+                    SendMessage(this.Handle, WM_SETICON, (IntPtr)ICON_SMALL, _smallIconHandle);
+                }
+
+                IntPtr hBig = LoadImage(hInstance, (IntPtr)IDI_APPLICATION, IMAGE_ICON, bigW, bigH, LR_DEFAULTCOLOR);
+                if (hBig != IntPtr.Zero)
+                {
+                    if (_bigIconHandle != IntPtr.Zero) DestroyIcon(_bigIconHandle);
+                    _bigIconHandle = hBig;
+                    SendMessage(this.Handle, WM_SETICON, (IntPtr)ICON_BIG, _bigIconHandle);
+                }
+            }
+            catch { }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            if (_smallIconHandle != IntPtr.Zero)
+            {
+                DestroyIcon(_smallIconHandle);
+                _smallIconHandle = IntPtr.Zero;
+            }
+            if (_bigIconHandle != IntPtr.Zero)
+            {
+                DestroyIcon(_bigIconHandle);
+                _bigIconHandle = IntPtr.Zero;
+            }
+            base.OnFormClosed(e);
         }
 
         protected override void WndProc(ref Message m)
@@ -95,7 +161,8 @@ namespace DirectoryIconTool
         {
             this.Text = "Windows Directory Icon Tool (Admin)";
             this.Size = new Size(520, 560);
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.FormBorderStyle = FormBorderStyle.FixedSingle;
+            this.ShowIcon = true;
             this.MaximizeBox = false;
             this.StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Segoe UI", 9F);
@@ -598,6 +665,16 @@ namespace DirectoryIconTool
         private const int SHCNF_IDLIST = 0x0000;
         private const int SHCNF_PATH = 0x0005;
         private const uint WM_SETTINGCHANGE = 0x001A;
+        private const uint WM_SETICON = 0x0080;
+        private const int ICON_SMALL = 0;
+        private const int ICON_BIG = 1;
+        private const uint IMAGE_ICON = 1;
+        private const uint LR_DEFAULTCOLOR = 0x0000;
+        private const int IDI_APPLICATION = 32512;
+        private const int SM_CXICON = 11;
+        private const int SM_CYICON = 12;
+        private const int SM_CXSMICON = 49;
+        private const int SM_CYSMICON = 50;
         private const uint SMTO_ABORTIFHUNG = 0x0002;
         private static readonly IntPtr HWND_BROADCAST = new IntPtr(0xffff);
 
@@ -609,6 +686,21 @@ namespace DirectoryIconTool
 
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern IntPtr LoadImage(IntPtr hinst, IntPtr lpszName, uint uType, int cxDesired, int cyDesired, uint fuLoad);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool DestroyIcon(IntPtr hIcon);
+
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
     }
 
     public static class ThemeHelper
