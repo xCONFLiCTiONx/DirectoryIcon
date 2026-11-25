@@ -43,13 +43,17 @@ if (-not (Test-Path $IsccPath)) {
     throw "Inno Setup 6 compiler (ISCC.exe) not found at: $IsccPath"
 }
 
-# Locate the already-built executable (does not compile the app)
+# Locate the newest already-built executable in the project (does not compile the app)
 $candidateExes = @(
-    (Join-Path $installDir $exeName),
     (Join-Path $repoRoot $exeName),
-    (Join-Path $repoRoot "bin\Release\$exeName")
+    (Join-Path $repoRoot "bin\Release\$exeName"),
+    (Join-Path $installDir $exeName)
 )
-$builtExe = $candidateExes | Where-Object { Test-Path $_ } | Select-Object -First 1
+$builtExe = $candidateExes |
+    Where-Object { Test-Path $_ } |
+    Get-Item |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1 -ExpandProperty FullName
 if (-not $builtExe) {
     throw "Built $exeName not found. Build the project first, then run .\.build-Installer.ps1."
 }
